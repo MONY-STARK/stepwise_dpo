@@ -8,3 +8,4 @@ mistral_model
 zephyr-7b-beta
 .env
 chat_gpt_code.py
+tiny_llama
