@@ -1,73 +1,60 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
-import json
+from Data_formatting import format_data
+import re
 
-model_id = "zephyr-7b-beta"
+# Set device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-tokenizer = AutoTokenizer.from_pretrained(model_id)
+# Load model and tokenizer
+model_id = "zephyr-7b-beta"  # Ensure this is correct
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
     torch_dtype=torch.float16,
     device_map="auto"
 )
+tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
 
-llm = pipeline("text-generation", model=model, tokenizer=tokenizer, return_full_text=False)
+# Load and format the dataset
+formatted_data = format_data("/home/mony/stepwise_dpo/prm800k/prm800k/data/phase1_train.jsonl")
+print(f"Length of Data: {len(formatted_data)}")
 
-# Load 10 samples from prm800k test split
-data = []
-with open("prm800k/prm800k/data/phase1_test.jsonl", "r") as f:
-    for idx, line in enumerate(f):
-        if idx == 10:
-            break
-        data.append(json.loads(line))
+# Process the first item
+# item = formatted_data[0]
+for question, steps in formatted_data[0].items():
+    for i, step in enumerate(steps):
+        print(f"\n🔹 Step {i + 1}")
 
-# Build prompt for each step
-def build_prompt(question, step):
-    return f"""You are a helpful math tutor.
+        prompt = f"""You are a helpful math tutor.
 
-The student is solving the problem:
-"{question}"
+        The student is solving the problem:
+        "{question}"
 
-Here is the student's step:
-"{step}"
+        Here is the student's step:
+        "{step}"
 
-Rate this step on a scale of 1 to 5, based on:
-- Correctness
-- Usefulness toward solving the problem
-- Clarity
+        Rate this step on a scale of -1 to 1 based on:
+        - Correctness
+        - Usefulness toward solving the problem
+        - Clarity
 
-Just return the score (1 to 5) and nothing else.
-Answer:"""
+        Just return the score (-1, 0, or 1):"""
 
-# Function to extract numeric score
-def extract_score(text):
-    for token in text.strip():
-        if token in "12345":
-            return int(token)
-    return -1
+        # Tokenize input
+        inputs = tokenizer(prompt, return_tensors="pt").to(device)
 
-# Stepwise Evaluation Loop
-results = []
-for item in data:
-    problem = item["problem"]
-    steps = item["solution"]
+        # Generate output
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=10,
+            do_sample=False
+        )
 
-    for idx, step in enumerate(steps):
-        prompt = build_prompt(problem, step)
-        response = llm(prompt, max_new_tokens=10, do_sample=False)
-        generated = response[0]["generated_text"].strip()
-        score = extract_score(generated)
+        # Decode and extract score
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        print("Model Raw Response:", response)
 
-        print(f"Step {idx+1}: Score={score}, Step='{step[:60]}...'")
-
-        results.append({
-            "problem": problem,
-            "step": step,
-            "score": score
-        })
-
-# Save results to JSON
-with open("zephyr_stepwise_scores.json", "w") as f:
-    json.dump(results, f, indent=2)
-
-print("\n✅ Saved Zephyr-based stepwise evaluation to 'zephyr_stepwise_scores.json'")
+        # Try to extract score from response
+        match = re.search(r"\b-?1\b|\b0\b|\b1\b", response)
+        score = int(match.group()) if match else None
+        print("Parsed Score:", score)
