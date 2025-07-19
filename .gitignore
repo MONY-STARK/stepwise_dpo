@@ -3,3 +3,7 @@ git rm --cached sample.py
 
 venv/
 sample.py
+prm800k/prm800k
+mistral_model
+zephyr-7b-beta
+.env
